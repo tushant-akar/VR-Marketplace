@@ -1,0 +1,41 @@
+[build]
+  functions = "netlify/functions"
+  publish = "public"
+  command = "npm run build"
+
+[build.environment]
+  NODE_ENV = "production"
+
+[[headers]]
+  for = "/.netlify/functions/*"
+  [headers.values]
+    Access-Control-Allow-Origin = "*"
+    Access-Control-Allow-Headers = "Content-Type, Authorization, X-Requested-With"
+    Access-Control-Allow-Methods = "GET, POST, PUT, DELETE, OPTIONS"
+    Access-Control-Max-Age = "86400"
+
+[[redirects]]
+  from = "/api/*"
+  to = "/.netlify/functions/:splat"
+  status = 200
+
+[[redirects]]
+  from = "/auth/*"
+  to = "/.netlify/functions/auth-:splat"
+  status = 200
+
+[functions]
+  included_files = ["netlify/functions/**"]
+
+[dev]
+  functions = "netlify/functions"
+  publish = "public"
+  port = 8888
+
+# Environment variables that should be set in Netlify dashboard:
+# SUPABASE_URL
+# SUPABASE_ANON_KEY  
+# SUPABASE_SERVICE_ROLE_KEY
+# JWT_SECRET
+# JWT_EXPIRES_IN
+# REFRESH_TOKEN_EXPIRES_IN
