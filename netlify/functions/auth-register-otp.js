@@ -238,7 +238,7 @@ exports.handler = async (event, context) => {
     return createSuccessResponse({
       email: sanitizedData.email,
       message: 'Verification code sent successfully',
-      expiresIn: '10 minutes'
+      expiresIn: '1 minutes'
     }, `Verification code sent to ${sanitizedData.email}. Please check your inbox and enter the 4-digit code to complete registration.`);
     
   } catch (error) {
