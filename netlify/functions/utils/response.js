@@ -1,61 +1,175 @@
-const { createClient } = require('@supabase/supabase-js');
+/**
+ * Utility functions for creating standardized API responses
+ */
 
-// Validate required environment variables
-const requiredEnvVars = [
-  'SUPABASE_URL',
-  'SUPABASE_SERVICE_ROLE_KEY',
-  'SUPABASE_ANON_KEY'
-];
+/**
+ * Create a standardized API response
+ * @param {number} statusCode - HTTP status code
+ * @param {*} data - Response data
+ * @param {string|null} message - Optional message
+ * @returns {Object} Netlify function response object
+ */
+const createResponse = (statusCode, data, message = null) => {
+  const isSuccess = statusCode >= 200 && statusCode < 300;
+  
+  return {
+    statusCode,
+    headers: {
+      'Content-Type': 'application/json',
+      'Access-Control-Allow-Origin': process.env.ALLOWED_ORIGINS || '*',
+      'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Requested-With',
+      'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
+      'Access-Control-Allow-Credentials': 'true',
+      'Cache-Control': 'no-cache, no-store, must-revalidate',
+      'Pragma': 'no-cache',
+      'Expires': '0'
+    },
+    body: JSON.stringify({
+      success: isSuccess,
+      message: message || (isSuccess ? 'Operation successful' : 'Operation failed'),
+      data: isSuccess ? data : null,
+      error: !isSuccess ? data : null,
+      timestamp: new Date().toISOString()
+    })
+  };
+};
 
-requiredEnvVars.forEach(varName => {
-  if (!process.env[varName]) {
-    throw new Error(`Missing required environment variable: ${varName}`);
+/**
+ * Create an error response
+ * @param {number} statusCode - HTTP error status code
+ * @param {*} error - Error data or message
+ * @param {string|null} message - Optional error message
+ * @returns {Object} Netlify function response object
+ */
+const createErrorResponse = (statusCode, error, message = null) => {
+  // Log error for debugging (but don't expose sensitive info)
+  console.error(`API Error ${statusCode}:`, {
+    message: message || 'An error occurred',
+    error: typeof error === 'string' ? error : error?.message || 'Unknown error',
+    timestamp: new Date().toISOString()
+  });
+
+  return createResponse(statusCode, error, message || 'An error occurred');
+};
+
+/**
+ * Create a success response
+ * @param {*} data - Success data
+ * @param {string|null} message - Optional success message
+ * @returns {Object} Netlify function response object
+ */
+const createSuccessResponse = (data, message = null) => {
+  return createResponse(200, data, message || 'Operation successful');
+};
+
+/**
+ * Create a validation error response
+ * @param {Array} errors - Array of validation errors
+ * @param {string|null} message - Optional message
+ * @returns {Object} Netlify function response object
+ */
+const createValidationErrorResponse = (errors, message = null) => {
+  return createErrorResponse(400, { validationErrors: errors }, message || 'Validation failed');
+};
+
+/**
+ * Create an unauthorized response
+ * @param {string|null} message - Optional message
+ * @returns {Object} Netlify function response object
+ */
+const createUnauthorizedResponse = (message = null) => {
+  return createErrorResponse(401, 'Unauthorized access', message || 'Authentication required');
+};
+
+/**
+ * Create a forbidden response
+ * @param {string|null} message - Optional message
+ * @returns {Object} Netlify function response object
+ */
+const createForbiddenResponse = (message = null) => {
+  return createErrorResponse(403, 'Access forbidden', message || 'Insufficient permissions');
+};
+
+/**
+ * Create a not found response
+ * @param {string|null} message - Optional message
+ * @returns {Object} Netlify function response object
+ */
+const createNotFoundResponse = (message = null) => {
+  return createErrorResponse(404, 'Resource not found', message || 'The requested resource was not found');
+};
+
+/**
+ * Create a conflict response
+ * @param {string|null} message - Optional message
+ * @returns {Object} Netlify function response object
+ */
+const createConflictResponse = (message = null) => {
+  return createErrorResponse(409, 'Resource conflict', message || 'Resource already exists');
+};
+
+/**
+ * Create a method not allowed response
+ * @param {Array} allowedMethods - Array of allowed HTTP methods
+ * @returns {Object} Netlify function response object
+ */
+const createMethodNotAllowedResponse = (allowedMethods = []) => {
+  const response = createErrorResponse(405, 'Method not allowed', 'HTTP method not allowed for this endpoint');
+  
+  if (allowedMethods.length > 0) {
+    response.headers['Allow'] = allowedMethods.join(', ');
   }
-});
+  
+  return response;
+};
 
-const supabaseUrl = process.env.SUPABASE_URL;
-const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-const supabaseAnonKey = process.env.SUPABASE_ANON_KEY;
+/**
+ * Create a rate limit exceeded response
+ * @param {string|null} message - Optional message
+ * @returns {Object} Netlify function response object
+ */
+const createRateLimitResponse = (message = null) => {
+  return createErrorResponse(429, 'Rate limit exceeded', message || 'Too many requests, please try again later');
+};
 
-// Admin client for server-side operations with elevated privileges
-const supabaseAdmin = createClient(supabaseUrl, supabaseServiceKey, {
-  auth: {
-    autoRefreshToken: false,
-    persistSession: false
-  }
-});
+/**
+ * Create an internal server error response
+ * @param {string|null} message - Optional message
+ * @returns {Object} Netlify function response object
+ */
+const createInternalServerErrorResponse = (message = null) => {
+  return createErrorResponse(500, 'Internal server error', message || 'An unexpected error occurred');
+};
 
-// Client for user operations with limited privileges
-const supabaseClient = createClient(supabaseUrl, supabaseAnonKey, {
-  auth: {
-    autoRefreshToken: false,
-    persistSession: false
-  }
-});
-
-// Test connection function
-const testConnection = async () => {
-  try {
-    const { data, error } = await supabaseAdmin
-      .from('users')
-      .select('count(*)')
-      .limit(1);
-    
-    if (error) {
-      console.error('Supabase connection test failed:', error);
-      return false;
-    }
-    
-    console.log('Supabase connection successful');
-    return true;
-  } catch (err) {
-    console.error('Supabase connection test error:', err);
-    return false;
-  }
+/**
+ * Handle CORS preflight requests
+ * @returns {Object} CORS preflight response
+ */
+const createCorsResponse = () => {
+  return {
+    statusCode: 200,
+    headers: {
+      'Access-Control-Allow-Origin': process.env.ALLOWED_ORIGINS || '*',
+      'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Requested-With',
+      'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
+      'Access-Control-Allow-Credentials': 'true',
+      'Access-Control-Max-Age': '86400' // 24 hours
+    },
+    body: ''
+  };
 };
 
 module.exports = {
-  supabaseAdmin,
-  supabaseClient,
-  testConnection
+  createResponse,
+  createErrorResponse,
+  createSuccessResponse,
+  createValidationErrorResponse,
+  createUnauthorizedResponse,
+  createForbiddenResponse,
+  createNotFoundResponse,
+  createConflictResponse,
+  createMethodNotAllowedResponse,
+  createRateLimitResponse,
+  createInternalServerErrorResponse,
+  createCorsResponse
 };
