@@ -1,7 +1,7 @@
 {
   "name": "vr-marketplace",
   "version": "1.0.0",
-  "description": "",
+  "description": "VR Supermarket Backend APIs",
   "main": "index.js",
   "engines": {
     "node": ">=18.0.0"
@@ -13,22 +13,32 @@
     "deploy:prod": "netlify deploy --prod",
     "test": "jest",
     "lint": "eslint netlify/functions/**/*.js",
-    "format": "prettier --write netlify/functions/**/*.js"
+    "format": "prettier --write netlify/functions/**/*.js",
+    "db:migrate": "node scripts/migrate.js",
+    "db:seed": "node scripts/seed.js"
   },
   "dependencies": {
     "@sendgrid/mail": "8.1.5",
     "@supabase/supabase-js": "^2.39.0",
     "bcryptjs": "^2.4.3",
-    "jsonwebtoken": "^9.0.2"
+    "jsonwebtoken": "^9.0.2",
+    "stripe": "18.2.1",
+    "axios": "1.10.0",
+    "uuid": "11.1.0",
+    "validator": "13.15.15"
   },
   "devDependencies": {
     "@netlify/functions": "^2.4.1",
     "eslint": "^8.57.0",
     "jest": "^29.7.0",
     "netlify-cli": "^22.1.6",
-    "prettier": "^3.1.1"
+    "prettier": "^3.1.1",
+    "supertest":"^7.1.1"
   },
   "keywords": [
+    "vr",
+    "Supermarket",
+    "ecommerce",
     "authentication",
     "supabase",
     "netlify",
