@@ -46,11 +46,17 @@ exports.handler = async (event, context) => {
 
 async function handleGetRequests(path, params, authHeader) {
   const pathSegments = path.split('/').filter(segment => segment);
+  console.log(pathSegments)
+
+  const route = pathSegments[pathSegments.length - 1] === 'vr-products' ? 'products' : pathSegments[pathSegments.length - 1];
+  const routeIndex = pathSegments.indexOf('vr-products') + 1;
+  const actualRoute = pathSegments[routeIndex] || 'products';
+  const routeParam = pathSegments[routeIndex + 1];
   
   try {
-    switch (pathSegments[0]) {
+    switch (actualRoute) {
       case 'products':
-        if (pathSegments[1]) {
+        if (routeParam) {
           // Get specific product by ID
           const productData = await productsService.getProductById(pathSegments[1]);
           
