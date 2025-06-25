@@ -58,7 +58,7 @@ async function handleGetRequests(path, params, authHeader) {
       case 'products':
         if (routeParam) {
           // Get specific product by ID
-          const productData = await productsService.getProductById(pathSegments[1]);
+          const productData = await productsService.getProductById(routeParam);
           
           // Log product view if user is authenticated
           if (authHeader) {
