@@ -13,9 +13,7 @@
     "deploy:prod": "netlify deploy --prod",
     "test": "jest",
     "lint": "eslint netlify/functions/**/*.js",
-    "format": "prettier --write netlify/functions/**/*.js",
-    "db:migrate": "node scripts/migrate.js",
-    "db:seed": "node scripts/seed.js"
+    "format": "prettier --write netlify/functions/**/*.js"
   },
   "dependencies": {
     "@sendgrid/mail": "8.1.5",
