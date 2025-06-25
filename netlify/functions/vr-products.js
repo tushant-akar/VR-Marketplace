@@ -124,10 +124,10 @@ async function handleGetRequests(path, params, authHeader) {
         return createSuccessResponse(searchResults, 'Search completed successfully');
       
       case 'shelf':
-        if (!pathSegments[1]) {
+        if (!routeParam) {
           return createErrorResponse(400, 'Shelf number is required');
         }
-        const shelfNumber = parseInt(pathSegments[1]);
+        const shelfNumber = parseInt(routeParam);
         const shelfProducts = await productsService.getProductsByShelf(shelfNumber);
         return createSuccessResponse(shelfProducts, 'Shelf products retrieved successfully');
       
