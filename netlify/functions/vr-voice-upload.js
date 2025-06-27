@@ -37,16 +37,25 @@ exports.handler = async (event, context) => {
   }
 
   try {
+    // Debug logging for headers
+    console.log('Event headers:', JSON.stringify(event.headers, null, 2));
+    console.log('Event body type:', typeof event.body);
+    console.log('Is base64 encoded:', event.isBase64Encoded);
+    
     // Check if request has multipart content
     const contentType = event.headers['content-type'] || event.headers['Content-Type'];
+    console.log('Content-Type:', contentType);
+    
     if (!contentType || !contentType.includes('multipart/form-data')) {
       return createErrorResponse(400, 'Content-Type must be multipart/form-data', headers);
     }
 
     // Parse multipart data using built-in parsing
     const boundary = extractBoundary(contentType);
+    console.log('Extracted boundary:', boundary);
+    
     if (!boundary) {
-      return createErrorResponse(400, 'Invalid multipart boundary', headers);
+      return createErrorResponse(400, `Invalid multipart boundary. Content-Type: ${contentType}`, headers);
     }
 
     // Convert base64 body to buffer for binary data
@@ -54,7 +63,12 @@ exports.handler = async (event, context) => {
       ? Buffer.from(event.body, 'base64')
       : Buffer.from(event.body, 'utf8');
 
+    console.log('Body buffer length:', bodyBuffer.length);
+    console.log('First 100 bytes:', bodyBuffer.slice(0, 100).toString());
+
     const parsedData = parseMultipartData(bodyBuffer, boundary);
+    console.log('Parsed data fields:', Object.keys(parsedData.fields));
+    console.log('Parsed data files:', Object.keys(parsedData.files));
     
     if (!parsedData.files || !parsedData.files.voice) {
       return createErrorResponse(400, 'No voice file provided', headers);
@@ -175,11 +189,26 @@ exports.handler = async (event, context) => {
 };
 
 /**
- * Extract boundary from Content-Type header
+ * Extract boundary from Content-Type header - Fixed for Netlify
  */
 function extractBoundary(contentType) {
-  const boundaryMatch = contentType.match(/boundary=([^;]+)/);
-  return boundaryMatch ? boundaryMatch[1].replace(/"/g, '') : null;
+  // Handle different boundary formats
+  const boundaryPatterns = [
+    /boundary=([^;,\s]+)/i,           // Standard format
+    /boundary="([^"]+)"/i,            // Quoted format
+    /boundary=([^;,\s"]+)/i           // Unquoted format
+  ];
+  
+  for (const pattern of boundaryPatterns) {
+    const match = contentType.match(pattern);
+    if (match) {
+      return match[1].replace(/['"]/g, '').trim();
+    }
+  }
+  
+  // Debug log for troubleshooting
+  console.log('Content-Type header:', contentType);
+  return null;
 }
 
 /**
