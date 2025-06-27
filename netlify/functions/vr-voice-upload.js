@@ -205,7 +205,7 @@ async function transcribeWithElevenLabs(audioBuffer, mimeType) {
     formData.append('audio', audioBlob, `audio.${getFileExtensionFromMimeType(mimeType)}`);
     
     // Add optional parameters for better transcription
-    formData.append('model', 'whisper-1');
+    formData.append('model_id', 'eleven_multilingual_v2');
     formData.append('response_format', 'verbose_json');
 
     console.log('Calling ElevenLabs API...');
