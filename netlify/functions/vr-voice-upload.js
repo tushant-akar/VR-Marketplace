@@ -202,7 +202,8 @@ async function transcribeWithElevenLabs(audioBuffer, mimeType) {
     // Prepare form data for ElevenLabs API
     const formData = new FormData();
     const audioBlob = new Blob([audioBuffer], { type: mimeType });
-    formData.append('audio', audioBlob, `audio.${getFileExtensionFromMimeType(mimeType)}`);
+    
+    formData.append('file', audioBlob, `audio.${getFileExtensionFromMimeType(mimeType)}`);
     
     // Add optional parameters for better transcription
     formData.append('model_id', 'eleven_multilingual_v2');
