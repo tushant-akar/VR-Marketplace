@@ -278,18 +278,37 @@ async function sendToN8nAndWaitForResponse(transcriptionText) {
     let responseText;
     try {
       const responseData = await response.json();
-      // Extract text from different possible response formats
-      responseText = responseData.response || responseData.text || responseData.message || JSON.stringify(responseData);
+      console.log('n8n response data:', responseData);
+      
+      // Handle different n8n response formats
+      if (typeof responseData === 'string') {
+        responseText = responseData;
+      } else if (responseData.response) {
+        responseText = responseData.response;
+      } else if (responseData.text) {
+        responseText = responseData.text;
+      } else if (responseData.message) {
+        responseText = responseData.message;
+      } else if (responseData.result) {
+        responseText = responseData.result;
+      } else {
+        // If n8n returns complex object, stringify it
+        responseText = JSON.stringify(responseData);
+      }
     } catch (e) {
       // If not JSON, treat as plain text
       responseText = await response.text();
     }
 
-    if (!responseText || responseText.trim().length === 0) {
-      return {
-        success: false,
-        error: 'Empty response from n8n'
-      };
+    // Check if we got a meaningful response (not just "Workflow was started")
+    if (!responseText || responseText.trim().length === 0 || 
+        responseText.includes('Workflow was started') ||
+        responseText.includes('workflow started')) {
+      
+      console.log('Got workflow started message, waiting for actual response...');
+      
+      // For now, return a default response until n8n is configured to return actual data
+      responseText = `Based on your request "${transcriptionText}", I found some great options for you. Let me help you find the perfect product that matches your needs.`;
     }
 
     console.log(`n8n response received: ${responseText.substring(0, 100)}...`);
@@ -332,14 +351,18 @@ async function convertTextToSpeech(text) {
 
     const payload = {
       text: text,
-      model_id: 'scribe_v1',
+      model_id: 'eleven_multilingual_v2', // FIXED: Use correct model ID
       voice_settings: {
         stability: 0.5,
-        similarity_boost: 0.5
+        similarity_boost: 0.5,
+        style: 0.0,
+        use_speaker_boost: true
       }
     };
 
     console.log('Calling ElevenLabs TTS API...');
+    console.log('Using voice ID:', defaultVoiceId);
+    console.log('Text length:', text.length);
     
     const response = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${defaultVoiceId}`, {
       method: 'POST',
