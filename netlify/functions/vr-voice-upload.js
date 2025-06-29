@@ -1,5 +1,5 @@
 // =============================================
-// Complete Voice Upload with Auto-Transcription
+// Complete Voice Upload with Auto-Transcription and n8n Integration
 // File: netlify/functions/vr-voice-upload.js
 // Single POST request does everything automatically
 // =============================================
@@ -10,7 +10,7 @@ const crypto = require('crypto');
 
 /**
  * Complete Voice Upload API Handler
- * Single request: Upload + Transcribe + Save to Database
+ * Single request: Upload + Transcribe + Save to Database + Send to n8n
  */
 exports.handler = async (event, context) => {
   // Increase timeout for transcription processing
@@ -136,7 +136,24 @@ exports.handler = async (event, context) => {
       .from('voice-recordings')
       .getPublicUrl(uploadData.path);
 
-    // Step 6: Log activity
+    // Step 6: Send transcription data to n8n webhook
+    const n8nResult = await sendToN8nWebhook({
+      voice_id: voiceRecord.id,
+      voice_name: voiceRecord.voice_name,
+      description: voiceRecord.description,
+      file_url: publicUrlData.publicUrl,
+      file_size_bytes: voiceFile.size,
+      estimated_duration_seconds: estimatedDurationSeconds,
+      transcription_status: voiceRecord.transcription_status,
+      transcription_text: voiceRecord.transcription_text,
+      transcription_confidence: voiceRecord.transcription_confidence,
+      language_detected: voiceRecord.language_detected,
+      transcription_error: voiceRecord.transcription_error,
+      uploaded_at: voiceRecord.created_at,
+      processed_at: new Date().toISOString()
+    });
+
+    // Step 7: Log activity
     await supabaseAdmin.from('vr_activity_logs').insert([{
       user_id: null,
       activity_type: 'complete_voice_upload',
@@ -145,7 +162,9 @@ exports.handler = async (event, context) => {
         voice_name: voice_name,
         file_size: voiceFile.size,
         transcription_success: transcriptionResult.success,
-        transcription_length: transcriptionResult.success ? transcriptionResult.transcription?.length : 0
+        transcription_length: transcriptionResult.success ? transcriptionResult.transcription?.length : 0,
+        n8n_webhook_sent: n8nResult.success,
+        n8n_webhook_error: n8nResult.success ? null : n8nResult.error
       }
     }]).then().catch(err => console.log('Activity log failed:', err));
 
@@ -167,12 +186,16 @@ exports.handler = async (event, context) => {
       language_detected: voiceRecord.language_detected,
       transcription_error: voiceRecord.transcription_error,
       
+      // n8n integration results
+      n8n_webhook_sent: n8nResult.success,
+      n8n_webhook_error: n8nResult.success ? null : n8nResult.error,
+      
       upload_status: 'success',
       uploaded_at: voiceRecord.created_at,
       processed_at: new Date().toISOString()
     }, 
     transcriptionResult.success 
-      ? 'Voice uploaded and transcribed successfully' 
+      ? 'Voice uploaded, transcribed, and sent to n8n successfully' 
       : 'Voice uploaded but transcription failed', 
     headers);
 
@@ -183,7 +206,85 @@ exports.handler = async (event, context) => {
 };
 
 /**
- * Transcribe audio using ElevenLabs API
+ * Send transcription data to n8n webhook in the specified format
+ * @param {Object} transcriptionData - Complete transcription data
+ * @returns {Promise<Object>} - n8n webhook result
+ */
+async function sendToN8nWebhook(transcriptionData) {
+  try {
+    console.log('Sending transcription data to n8n webhook...');
+    
+    // Check if n8n webhook URL is configured
+    const n8nWebhookUrl = process.env.N8N_WEBHOOK_URL;
+    if (!n8nWebhookUrl) {
+      console.log('N8N_WEBHOOK_URL not configured, skipping n8n integration');
+      return {
+        success: false,
+        error: 'N8N_WEBHOOK_URL not configured'
+      };
+    }
+
+    // Prepare JSON payload in the exact format specified by user
+    // Format: { "Requirement": "transcribed text" }
+    const payload = {
+      "Requirement": transcriptionData.transcription_text || "No transcription available"
+    };
+
+    console.log('Calling n8n webhook:', n8nWebhookUrl);
+    console.log('Payload:', JSON.stringify(payload, null, 2));
+    
+    // Send to n8n webhook with exact format specified
+    const response = await fetch(n8nWebhookUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        // Add Bearer token authentication if configured
+        ...(process.env.N8N_WEBHOOK_AUTH_TOKEN && {
+          'Authorization': `Bearer ${process.env.N8N_WEBHOOK_AUTH_TOKEN}`
+        })
+      },
+      body: JSON.stringify(payload)
+    });
+
+    console.log(`n8n webhook response status: ${response.status}`);
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error('n8n webhook error:', errorText);
+      return {
+        success: false,
+        error: `n8n webhook error: ${response.status} - ${errorText}`
+      };
+    }
+
+    // Try to parse response (n8n might return JSON or plain text)
+    let responseData;
+    try {
+      responseData = await response.json();
+    } catch (e) {
+      responseData = await response.text();
+    }
+
+    console.log('n8n webhook sent successfully');
+    
+    return {
+      success: true,
+      response: responseData,
+      status_code: response.status,
+      sent_requirement: payload.Requirement
+    };
+
+  } catch (error) {
+    console.error('n8n webhook error:', error);
+    return {
+      success: false,
+      error: error.message || 'Failed to send data to n8n webhook'
+    };
+  }
+}
+
+/**
+ * Transcribe audio using ElevenLabs API - FIXED VERSION
  */
 async function transcribeWithElevenLabs(audioBuffer, mimeType) {
   try {
@@ -203,10 +304,11 @@ async function transcribeWithElevenLabs(audioBuffer, mimeType) {
     const formData = new FormData();
     const audioBlob = new Blob([audioBuffer], { type: mimeType });
     
+    // FIXED: Use 'file' parameter instead of 'audio' as required by ElevenLabs API
     formData.append('file', audioBlob, `audio.${getFileExtensionFromMimeType(mimeType)}`);
     
-    // Add optional parameters for better transcription
-    formData.append('model_id', 'scribe_v1');
+    // FIXED: Use model_id instead of model, and use a valid ElevenLabs model
+    formData.append('model_id', 'eleven_multilingual_v2');
     formData.append('response_format', 'verbose_json');
 
     console.log('Calling ElevenLabs API...');
@@ -216,6 +318,7 @@ async function transcribeWithElevenLabs(audioBuffer, mimeType) {
       method: 'POST',
       headers: {
         'xi-api-key': elevenLabsApiKey
+        // Note: Don't set Content-Type header when using FormData
       },
       body: formData
     });
