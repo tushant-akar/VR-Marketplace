@@ -308,7 +308,7 @@ async function transcribeWithElevenLabs(audioBuffer, mimeType) {
     formData.append('file', audioBlob, `audio.${getFileExtensionFromMimeType(mimeType)}`);
     
     // FIXED: Use model_id instead of model, and use a valid ElevenLabs model
-    formData.append('model_id', 'eleven_multilingual_v2');
+    formData.append('model_id', 'scribe_v1');
     formData.append('response_format', 'verbose_json');
 
     console.log('Calling ElevenLabs API...');
