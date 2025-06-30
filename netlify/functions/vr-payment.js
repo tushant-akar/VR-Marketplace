@@ -120,9 +120,9 @@ async function handlePaymentPostRequests(pathSegments, body, user) {
           return createErrorResponse(400, 'Session ID is required in path');
         }
         
-        const { payment_method = 'stripe' } = body;
+        const { payment_method: checkoutPaymentMethod = 'stripe' } = body;
         
-        if (!['cash', 'stripe'].includes(payment_method)) {
+        if (!['cash', 'stripe'].includes(checkoutPaymentMethod)) {
           return createErrorResponse(400, 'Invalid payment method. Must be "cash" or "stripe"');
         }
         
@@ -133,7 +133,7 @@ async function handlePaymentPostRequests(pathSegments, body, user) {
         const order = await paymentService.createOrder(
           pathSegments[1],
           user.id,
-          payment_method,
+          checkoutPaymentMethod,
           checkoutDetails.totals
         );
         
