@@ -155,20 +155,25 @@ class VRPaymentService {
       const orderNumber = this.generateOrderNumber();
 
       // Create order with explicit order_number
+      const orderData = {
+        user_id: userId,
+        session_id: sessionId,
+        payment_method: paymentMethod,
+        payment_status: 'pending',
+        subtotal: totals.subtotal,
+        tax_amount: totals.taxAmount,
+        discount_amount: totals.discountAmount,
+        total_amount: totals.totalAmount,
+        status: 'pending'
+      };
+
+      // Only set order_number if we want to override database generation
+      // Remove this line if you fix the database function
+      orderData.order_number = orderNumber;
+
       const { data: order, error: orderError } = await supabaseAdmin
         .from('orders')
-        .insert([{
-          user_id: userId,
-          session_id: sessionId,
-          order_number: orderNumber, // ✅ FIXED: Explicit order number generation
-          payment_method: paymentMethod,
-          payment_status: 'pending',
-          subtotal: totals.subtotal,
-          tax_amount: totals.taxAmount,
-          discount_amount: totals.discountAmount,
-          total_amount: totals.totalAmount,
-          status: 'pending'
-        }])
+        .insert([orderData])
         .select()
         .single();
 
@@ -182,8 +187,8 @@ class VRPaymentService {
         order_id: order.id,
         product_id: item.product_id,
         quantity: item.quantity,
-        unit_price: item.unit_price,
-        total_price: item.total_price || (item.unit_price * item.quantity)
+        unit_price: item.unit_price
+        // Remove total_price - let database calculate it or use default
       }));
 
       const { error: itemsError } = await supabaseAdmin
