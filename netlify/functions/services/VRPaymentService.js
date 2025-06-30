@@ -495,13 +495,27 @@ class VRPaymentService {
         return;
       }
 
-      // Update stock for each product using direct SQL
+      // Update stock for each product
       for (const item of orderItems) {
+        // First get current stock
+        const { data: product, error: fetchError } = await supabaseAdmin
+          .from('products')
+          .select('stock_quantity')
+          .eq('id', item.product_id)
+          .single();
+
+        if (fetchError || !product) {
+          console.error(`Error fetching product ${item.product_id}:`, fetchError);
+          continue;
+        }
+
+        // Calculate new stock quantity
+        const newStock = Math.max(0, product.stock_quantity - item.quantity);
+
+        // Update the stock
         const { error: stockError } = await supabaseAdmin
           .from('products')
-          .update({
-            stock_quantity: supabaseAdmin.raw(`stock_quantity - ${item.quantity}`)
-          })
+          .update({ stock_quantity: newStock })
           .eq('id', item.product_id);
 
         if (stockError) {
