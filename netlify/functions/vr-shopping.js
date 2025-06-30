@@ -1,5 +1,5 @@
 /**
- * VR Shopping API endpoint
+ * VR Shopping API endpoint - FIXED PATH ROUTING
  * Handles shopping sessions, cart management
  */
 const { createResponse, createErrorResponse, createSuccessResponse } = require('./utils/response');
@@ -34,20 +34,29 @@ exports.handler = async (event, context) => {
       }
     }
 
+    // ✅ FIXED: Properly handle path segments
     const pathSegments = path.split('/').filter(segment => segment);
+    
+    // Find the actual route after 'vr-shopping'
+    const routeIndex = pathSegments.indexOf('vr-shopping') + 1;
+    const actualPathSegments = pathSegments.slice(routeIndex);
+    
+    console.log('Full path:', path);
+    console.log('Path segments:', pathSegments);
+    console.log('Actual route segments:', actualPathSegments);
 
     switch (httpMethod) {
       case 'GET':
-        return await handleShoppingGetRequests(pathSegments, auth.user);
+        return await handleShoppingGetRequests(actualPathSegments, auth.user);
       
       case 'POST':
-        return await handleShoppingPostRequests(pathSegments, requestBody, auth.user);
+        return await handleShoppingPostRequests(actualPathSegments, requestBody, auth.user);
       
       case 'PUT':
-        return await handleShoppingPutRequests(pathSegments, requestBody, auth.user);
+        return await handleShoppingPutRequests(actualPathSegments, requestBody, auth.user);
       
       case 'DELETE':
-        return await handleShoppingDeleteRequests(pathSegments, auth.user);
+        return await handleShoppingDeleteRequests(actualPathSegments, auth.user);
       
       default:
         return createErrorResponse(405, `Method ${httpMethod} not allowed`);
@@ -60,6 +69,8 @@ exports.handler = async (event, context) => {
 
 async function handleShoppingGetRequests(pathSegments, user) {
   try {
+    console.log('GET - Processing path segments:', pathSegments);
+    
     switch (pathSegments[0]) {
       case 'session':
         if (pathSegments[1]) {
@@ -78,7 +89,7 @@ async function handleShoppingGetRequests(pathSegments, user) {
         return createSuccessResponse(cart, 'Shopping cart retrieved successfully');
       
       default:
-        return createErrorResponse(404, 'Endpoint not found');
+        return createErrorResponse(404, `Endpoint not found. Available GET routes: session/{id}, cart/{sessionId}`);
     }
   } catch (error) {
     console.error('Shopping GET error:', error);
@@ -88,6 +99,8 @@ async function handleShoppingGetRequests(pathSegments, user) {
 
 async function handleShoppingPostRequests(pathSegments, body, user) {
   try {
+    console.log('POST - Processing path segments:', pathSegments);
+    
     switch (pathSegments[0]) {
       case 'session':
         // Create new shopping session
@@ -107,10 +120,10 @@ async function handleShoppingPostRequests(pathSegments, body, user) {
           const cartItem = await shoppingService.addToCart(session_id, product_id, quantity, user.id);
           return createSuccessResponse(cartItem, 'Product added to cart successfully');
         }
-        return createErrorResponse(404, 'Endpoint not found');
+        return createErrorResponse(404, `Endpoint not found. Available POST routes: session, cart/add`);
       
       default:
-        return createErrorResponse(404, 'Endpoint not found');
+        return createErrorResponse(404, `Endpoint not found. Available POST routes: session, cart/add`);
     }
   } catch (error) {
     console.error('Shopping POST error:', error);
@@ -120,6 +133,8 @@ async function handleShoppingPostRequests(pathSegments, body, user) {
 
 async function handleShoppingPutRequests(pathSegments, body, user) {
   try {
+    console.log('PUT - Processing path segments:', pathSegments);
+    
     if (pathSegments[0] === 'cart' && pathSegments[1] === 'quantity') {
       // Update cart item quantity
       const { session_id, product_id, quantity } = body;
@@ -144,7 +159,7 @@ async function handleShoppingPutRequests(pathSegments, body, user) {
       return createSuccessResponse(endedSession, 'Shopping session ended successfully');
     }
     
-    return createErrorResponse(404, 'Endpoint not found');
+    return createErrorResponse(404, `Endpoint not found. Available PUT routes: cart/quantity, session/end`);
   } catch (error) {
     console.error('Shopping PUT error:', error);
     return createErrorResponse(500, error.message);
@@ -153,6 +168,8 @@ async function handleShoppingPutRequests(pathSegments, body, user) {
 
 async function handleShoppingDeleteRequests(pathSegments, user) {
   try {
+    console.log('DELETE - Processing path segments:', pathSegments);
+    
     if (pathSegments[0] === 'cart') {
       if (pathSegments[1] === 'clear') {
         // Clear entire cart
@@ -173,7 +190,7 @@ async function handleShoppingDeleteRequests(pathSegments, user) {
       }
     }
     
-    return createErrorResponse(404, 'Endpoint not found');
+    return createErrorResponse(404, `Endpoint not found. Available DELETE routes: cart/clear/{sessionId}, cart/{sessionId}/{productId}`);
   } catch (error) {
     console.error('Shopping DELETE error:', error);
     return createErrorResponse(500, error.message);
