@@ -1,5 +1,5 @@
 /**
- * VR Payment API endpoint - FIXED PATH ROUTING
+ * VR Payment API endpoint - FIXED VARIABLE CONFLICTS
  * Handles checkout, payment processing, and order management
  */
 const { createResponse, createErrorResponse, createSuccessResponse } = require('./utils/response');
@@ -79,8 +79,8 @@ async function handlePaymentGetRequests(pathSegments, user, queryParams) {
       case 'order':
         if (pathSegments[1]) {
           // Get specific order
-          const order = await paymentService.getOrder(pathSegments[1], user.id);
-          return createSuccessResponse(order, 'Order retrieved successfully');
+          const orderDetails = await paymentService.getOrder(pathSegments[1], user.id);
+          return createSuccessResponse(orderDetails, 'Order retrieved successfully');
         } else {
           return createErrorResponse(400, 'Order ID is required');
         }
@@ -130,14 +130,14 @@ async function handlePaymentPostRequests(pathSegments, body, user) {
         const checkoutData = await paymentService.initializeCheckout(pathSegments[1], user.id);
         
         // Create order
-        const order = await paymentService.createOrder(
+        const checkoutOrder = await paymentService.createOrder(
           pathSegments[1],
           user.id,
           checkoutPaymentMethod,
           checkoutData.totals
         );
         
-        return createSuccessResponse(order, 'Checkout completed and order created successfully');
+        return createSuccessResponse(checkoutOrder, 'Checkout completed and order created successfully');
       
       case 'order':
         // Create new order (original endpoint)
@@ -155,14 +155,14 @@ async function handlePaymentPostRequests(pathSegments, body, user) {
         const orderCheckoutDetails = await paymentService.initializeCheckout(session_id, user.id);
         
         // Create order
-        const order = await paymentService.createOrder(
+        const createdOrder = await paymentService.createOrder(
           session_id,
           user.id,
           payment_method,
           orderCheckoutDetails.totals
         );
         
-        return createSuccessResponse(order, 'Order created successfully');
+        return createSuccessResponse(createdOrder, 'Order created successfully');
       
       case 'payment':
         if (pathSegments[1] === 'cash') {
