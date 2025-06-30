@@ -1,12 +1,12 @@
 /**
- * VR Shopping API endpoint - FIXED PATH ROUTING
- * Handles shopping sessions, cart management
+ * VR Payment API endpoint - FIXED PATH ROUTING
+ * Handles checkout, payment processing, and order management
  */
 const { createResponse, createErrorResponse, createSuccessResponse } = require('./utils/response');
 const { authenticateUser } = require('./utils/auth');
-const VRShoppingService = require('./services/VRShoppingService');
+const VRPaymentService = require('./services/VRPaymentService');
 
-const shoppingService = new VRShoppingService();
+const paymentService = new VRPaymentService();
 
 exports.handler = async (event, context) => {
   // Handle CORS preflight
@@ -15,7 +15,7 @@ exports.handler = async (event, context) => {
   }
 
   try {
-    const { httpMethod, path, body } = event;
+    const { httpMethod, path, body, queryStringParameters = {} } = event;
     const authHeader = event.headers.authorization || event.headers.Authorization;
 
     // Authenticate user
@@ -37,8 +37,8 @@ exports.handler = async (event, context) => {
     // ✅ FIXED: Properly handle path segments
     const pathSegments = path.split('/').filter(segment => segment);
     
-    // Find the actual route after 'vr-shopping'
-    const routeIndex = pathSegments.indexOf('vr-shopping') + 1;
+    // Find the actual route after 'vr-payment'
+    const routeIndex = pathSegments.indexOf('vr-payment') + 1;
     const actualPathSegments = pathSegments.slice(routeIndex);
     
     console.log('Full path:', path);
@@ -47,152 +47,223 @@ exports.handler = async (event, context) => {
 
     switch (httpMethod) {
       case 'GET':
-        return await handleShoppingGetRequests(actualPathSegments, auth.user);
+        return await handlePaymentGetRequests(actualPathSegments, auth.user, queryStringParameters);
       
       case 'POST':
-        return await handleShoppingPostRequests(actualPathSegments, requestBody, auth.user);
+        return await handlePaymentPostRequests(actualPathSegments, requestBody, auth.user);
       
       case 'PUT':
-        return await handleShoppingPutRequests(actualPathSegments, requestBody, auth.user);
-      
-      case 'DELETE':
-        return await handleShoppingDeleteRequests(actualPathSegments, auth.user);
+        return await handlePaymentPutRequests(actualPathSegments, requestBody, auth.user);
       
       default:
         return createErrorResponse(405, `Method ${httpMethod} not allowed`);
     }
   } catch (error) {
-    console.error('VR Shopping API error:', error);
+    console.error('VR Payment API error:', error);
     return createErrorResponse(500, 'Internal server error', error.message);
   }
 };
 
-async function handleShoppingGetRequests(pathSegments, user) {
+async function handlePaymentGetRequests(pathSegments, user, queryParams) {
   try {
     console.log('GET - Processing path segments:', pathSegments);
     
     switch (pathSegments[0]) {
-      case 'session':
-        if (pathSegments[1]) {
-          // Get specific session details
-          const sessionDetails = await shoppingService.getSessionDetails(pathSegments[1]);
-          return createSuccessResponse(sessionDetails, 'Session details retrieved successfully');
-        } else {
-          return createErrorResponse(400, 'Session ID is required');
-        }
-      
-      case 'cart':
+      case 'checkout':
         if (!pathSegments[1]) {
           return createErrorResponse(400, 'Session ID is required');
         }
-        const cart = await shoppingService.getShoppingCart(pathSegments[1]);
-        return createSuccessResponse(cart, 'Shopping cart retrieved successfully');
+        const checkoutDetails = await paymentService.initializeCheckout(pathSegments[1], user.id);
+        return createSuccessResponse(checkoutDetails, 'Checkout initialized successfully');
+      
+      case 'order':
+        if (pathSegments[1]) {
+          // Get specific order
+          const order = await paymentService.getOrder(pathSegments[1], user.id);
+          return createSuccessResponse(order, 'Order retrieved successfully');
+        } else {
+          return createErrorResponse(400, 'Order ID is required');
+        }
+      
+      case 'orders':
+        // Get user order history
+        const page = parseInt(queryParams.page) || 1;
+        const limit = parseInt(queryParams.limit) || 10;
+        
+        const orderHistory = await paymentService.getUserOrderHistory(user.id, { page, limit });
+        return createSuccessResponse(orderHistory, 'Order history retrieved successfully');
+      
+      case 'receipt':
+        if (!pathSegments[1]) {
+          return createErrorResponse(400, 'Order ID is required');
+        }
+        const receipt = await paymentService.generateReceipt(pathSegments[1]);
+        return createSuccessResponse(receipt, 'Receipt generated successfully');
       
       default:
-        return createErrorResponse(404, `Endpoint not found. Available GET routes: session/{id}, cart/{sessionId}`);
+        return createErrorResponse(404, `Endpoint not found. Available GET routes: checkout/{sessionId}, order/{orderId}, orders, receipt/{orderId}`);
     }
   } catch (error) {
-    console.error('Shopping GET error:', error);
+    console.error('Payment GET error:', error);
     return createErrorResponse(500, error.message);
   }
 }
 
-async function handleShoppingPostRequests(pathSegments, body, user) {
+async function handlePaymentPostRequests(pathSegments, body, user) {
   try {
     console.log('POST - Processing path segments:', pathSegments);
     
     switch (pathSegments[0]) {
-      case 'session':
-        // Create new shopping session
-        const vrData = body.vr_data || {};
-        const sessionResult = await shoppingService.createShoppingSession(user.id, vrData);
-        return createSuccessResponse(sessionResult, 'Shopping session created successfully');
+      case 'checkout':
+        // Create checkout/order - alternative endpoint
+        if (!pathSegments[1]) {
+          return createErrorResponse(400, 'Session ID is required in path');
+        }
+        
+        const { payment_method: checkoutPaymentMethod = 'stripe' } = body;
+        
+        if (!['cash', 'stripe'].includes(checkoutPaymentMethod)) {
+          return createErrorResponse(400, 'Invalid payment method. Must be "cash" or "stripe"');
+        }
+        
+        // Initialize checkout first
+        const checkoutData = await paymentService.initializeCheckout(pathSegments[1], user.id);
+        
+        // Create order
+        const newOrder = await paymentService.createOrder(
+          pathSegments[1],
+          user.id,
+          checkoutPaymentMethod,
+          checkoutData.totals
+        );
+        
+        return createSuccessResponse(newOrder, 'Checkout completed and order created successfully');
       
-      case 'cart':
-        if (pathSegments[1] === 'add') {
-          // Add item to cart
-          const { session_id, product_id, quantity = 1 } = body;
+      case 'order':
+        // Create new order (original endpoint)
+        const { session_id, payment_method } = body;
+        
+        if (!session_id || !payment_method) {
+          return createErrorResponse(400, 'Session ID and payment method are required');
+        }
+        
+        if (!['cash', 'stripe'].includes(payment_method)) {
+          return createErrorResponse(400, 'Invalid payment method. Must be "cash" or "stripe"');
+        }
+        
+        // Initialize checkout first
+        const orderCheckoutDetails = await paymentService.initializeCheckout(session_id, user.id);
+        
+        // Create order
+        const createdOrder = await paymentService.createOrder(
+          session_id,
+          user.id,
+          payment_method,
+          orderCheckoutDetails.totals
+        );
+        
+        return createSuccessResponse(createdOrder, 'Order created successfully');
+      
+      case 'payment':
+        if (pathSegments[1] === 'cash') {
+          // Process cash payment
+          const { order_id, cash_received } = body;
           
-          if (!session_id || !product_id) {
-            return createErrorResponse(400, 'Session ID and Product ID are required');
+          if (!order_id || !cash_received) {
+            return createErrorResponse(400, 'Order ID and cash received amount are required');
           }
           
-          const cartItem = await shoppingService.addToCart(session_id, product_id, quantity, user.id);
-          return createSuccessResponse(cartItem, 'Product added to cart successfully');
+          const paymentResult = await paymentService.processCashPayment(
+            order_id,
+            user.id,
+            parseFloat(cash_received)
+          );
+          
+          return createSuccessResponse(paymentResult, 'Cash payment processed successfully');
+        } else if (pathSegments[1] === 'stripe') {
+          if (pathSegments[2] === 'intent') {
+            // Create Stripe payment intent
+            const { order_id } = body;
+            
+            if (!order_id) {
+              return createErrorResponse(400, 'Order ID is required');
+            }
+            
+            const paymentIntent = await paymentService.createStripePaymentIntent(order_id, user.id);
+            return createSuccessResponse(paymentIntent, 'Payment intent created successfully');
+          } else if (pathSegments[2] === 'confirm') {
+            // Confirm Stripe payment
+            const { order_id, payment_intent_id } = body;
+            
+            if (!order_id || !payment_intent_id) {
+              return createErrorResponse(400, 'Order ID and payment intent ID are required');
+            }
+            
+            const confirmationResult = await paymentService.confirmStripePayment(
+              order_id,
+              user.id,
+              payment_intent_id
+            );
+            
+            return createSuccessResponse(confirmationResult, 'Payment confirmed successfully');
+          } else {
+            return createErrorResponse(404, `Invalid Stripe endpoint. Use: payment/stripe/intent or payment/stripe/confirm`);
+          }
+        } else {
+          return createErrorResponse(404, `Invalid payment method. Use: payment/cash or payment/stripe/*`);
         }
-        return createErrorResponse(404, `Endpoint not found. Available POST routes: session, cart/add`);
+        break;
+      
+      case 'refund':
+        // Process refund
+        const { order_id, refund_amount, reason } = body;
+        
+        if (!order_id || !refund_amount || !reason) {
+          return createErrorResponse(400, 'Order ID, refund amount, and reason are required');
+        }
+        
+        const refundResult = await paymentService.processRefund(
+          order_id,
+          user.id,
+          parseFloat(refund_amount),
+          reason
+        );
+        
+        return createSuccessResponse(refundResult, 'Refund processed successfully');
       
       default:
-        return createErrorResponse(404, `Endpoint not found. Available POST routes: session, cart/add`);
+        return createErrorResponse(404, `Endpoint not found. Available POST routes: checkout/{sessionId}, order, payment/cash, payment/stripe/intent, payment/stripe/confirm, refund`);
     }
   } catch (error) {
-    console.error('Shopping POST error:', error);
+    console.error('Payment POST error:', error);
     return createErrorResponse(500, error.message);
   }
 }
 
-async function handleShoppingPutRequests(pathSegments, body, user) {
+async function handlePaymentPutRequests(pathSegments, body, user) {
   try {
     console.log('PUT - Processing path segments:', pathSegments);
     
-    if (pathSegments[0] === 'cart' && pathSegments[1] === 'quantity') {
-      // Update cart item quantity
-      const { session_id, product_id, quantity } = body;
+    if (pathSegments[0] === 'order' && pathSegments[1] === 'cancel') {
+      // Cancel order
+      const { order_id, reason } = body;
       
-      if (!session_id || !product_id || !quantity) {
-        return createErrorResponse(400, 'Session ID, Product ID, and quantity are required');
+      if (!order_id) {
+        return createErrorResponse(400, 'Order ID is required');
       }
       
-      const updatedItem = await shoppingService.updateCartQuantity(session_id, product_id, quantity, user.id);
-      return createSuccessResponse(updatedItem, 'Cart quantity updated successfully');
+      const cancellationResult = await paymentService.cancelOrder(
+        order_id,
+        user.id,
+        reason || 'Customer cancellation'
+      );
+      
+      return createSuccessResponse(cancellationResult, 'Order cancelled successfully');
     }
     
-    if (pathSegments[0] === 'session' && pathSegments[1] === 'end') {
-      // End shopping session
-      const { session_id, status = 'abandoned' } = body;
-      
-      if (!session_id) {
-        return createErrorResponse(400, 'Session ID is required');
-      }
-      
-      const endedSession = await shoppingService.endShoppingSession(session_id, user.id, status);
-      return createSuccessResponse(endedSession, 'Shopping session ended successfully');
-    }
-    
-    return createErrorResponse(404, `Endpoint not found. Available PUT routes: cart/quantity, session/end`);
+    return createErrorResponse(404, `Endpoint not found. Available PUT routes: order/cancel`);
   } catch (error) {
-    console.error('Shopping PUT error:', error);
-    return createErrorResponse(500, error.message);
-  }
-}
-
-async function handleShoppingDeleteRequests(pathSegments, user) {
-  try {
-    console.log('DELETE - Processing path segments:', pathSegments);
-    
-    if (pathSegments[0] === 'cart') {
-      if (pathSegments[1] === 'clear') {
-        // Clear entire cart
-        const sessionId = pathSegments[2];
-        if (!sessionId) {
-          return createErrorResponse(400, 'Session ID is required');
-        }
-        
-        const result = await shoppingService.clearCart(sessionId, user.id);
-        return createSuccessResponse(result, 'Cart cleared successfully');
-      } else if (pathSegments[1] && pathSegments[2]) {
-        // Remove specific item from cart
-        const sessionId = pathSegments[1];
-        const productId = pathSegments[2];
-        
-        const result = await shoppingService.removeFromCart(sessionId, productId, user.id);
-        return createSuccessResponse(result, 'Product removed from cart successfully');
-      }
-    }
-    
-    return createErrorResponse(404, `Endpoint not found. Available DELETE routes: cart/clear/{sessionId}, cart/{sessionId}/{productId}`);
-  } catch (error) {
-    console.error('Shopping DELETE error:', error);
+    console.error('Payment PUT error:', error);
     return createErrorResponse(500, error.message);
   }
 }
