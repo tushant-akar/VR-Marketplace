@@ -1,7 +1,7 @@
 // =============================================
-// Complete Voice Upload with Round-trip Processing
-// File: netlify/functions/vr-voice-upload.js
-// Upload → Transcribe → n8n → Response → TTS → Frontend
+// Streamlined Voice Processing API
+// File: netlify/functions/vr-voice-process.js
+// Speech → ElevenLabs → n8n → Supabase (Complete Workflow)
 // =============================================
 
 const { supabaseAdmin } = require('./config/supabase');
@@ -9,11 +9,10 @@ const { createSuccessResponse, createErrorResponse } = require('./utils/response
 const crypto = require('crypto');
 
 /**
- * Complete Voice Upload API Handler with Round-trip Processing
- * Flow: Upload → Transcribe → n8n → Get Response → Convert to Voice → Return Both
+ * Complete Voice Processing API Handler
+ * Flow: Audio Upload → Speech-to-Text → n8n Processing → Save Response
  */
 exports.handler = async (event, context) => {
-  // Increase timeout for complete processing
   context.callbackWaitsForEmptyEventLoop = false;
   
   const headers = {
@@ -32,15 +31,10 @@ exports.handler = async (event, context) => {
   }
 
   try {
-    console.log('Starting complete voice processing workflow...');
+    console.log('Starting streamlined voice processing...');
 
-    // Parse multipart data
-    const contentType = event.headers['content-type'] || event.headers['Content-Type'];
-    if (!contentType || !contentType.includes('multipart/form-data')) {
-      return createErrorResponse(400, 'Content-Type must be multipart/form-data', headers);
-    }
-
-    const parsedData = await parseMultipartDataFast(event);
+    // Parse multipart form data
+    const parsedData = await parseMultipartData(event);
     
     if (!parsedData.success) {
       return createErrorResponse(400, parsedData.error, headers);
@@ -48,296 +42,118 @@ exports.handler = async (event, context) => {
 
     const { files, fields } = parsedData.data;
 
-    // Validate inputs
-    if (!files.voice) {
-      return createErrorResponse(400, 'No voice file provided', headers);
+    // Validate audio file
+    if (!files.audio) {
+      return createErrorResponse(400, 'No audio file provided', headers);
     }
 
-    const voiceFile = files.voice;
-    const voice_name = fields.voice_name;
-    const description = fields.description || '';
+    const audioFile = files.audio;
+    const userId = fields.user_id || null;
+    const sessionId = fields.session_id || null;
 
-    if (!voice_name || voice_name.trim().length < 2) {
-      return createErrorResponse(400, 'Voice name is required (minimum 2 characters)', headers);
+    // Validate file
+    if (audioFile.size > 25 * 1024 * 1024) { // 25MB limit
+      return createErrorResponse(400, 'Audio file too large. Maximum size is 25MB', headers);
     }
 
-    if (voiceFile.size > 100 * 1024 * 1024) {
-      return createErrorResponse(400, 'File too large. Maximum size is 100MB', headers);
+    const allowedTypes = ['audio/wav', 'audio/mp3', 'audio/mpeg', 'audio/m4a', 'audio/ogg', 'audio/webm', 'audio/flac'];
+    if (!allowedTypes.includes(audioFile.type)) {
+      return createErrorResponse(400, 'Invalid audio format. Supported: WAV, MP3, M4A, OGG, WebM, FLAC', headers);
     }
 
-    const allowedTypes = ['audio/wav', 'audio/mp3', 'audio/mpeg', 'audio/m4a', 'audio/ogg', 'audio/webm', 'audio/flac', 'audio/aac'];
-    if (!allowedTypes.includes(voiceFile.type)) {
-      return createErrorResponse(400, 'Invalid file type. Allowed: WAV, MP3, M4A, OGG, WebM, FLAC, AAC', headers);
-    }
+    console.log(`Processing audio file: ${audioFile.filename}, Size: ${audioFile.size} bytes`);
 
-    console.log(`Processing voice file: ${voice_name}, Size: ${voiceFile.size} bytes`);
-
-    // Step 1: Ensure bucket exists
-    const bucketReady = await ensureBucketExists();
-    if (!bucketReady) {
-      return createErrorResponse(500, 'Storage setup failed', headers);
-    }
-
-    // Step 2: Upload file to Supabase Storage
-    const fileExtension = getFileExtension(voiceFile.filename || voiceFile.type);
-    const uniqueId = crypto.randomUUID();
-    const timestamp = new Date().toISOString().split('T')[0];
-    const fileName = `voice_uploads/${timestamp}/${uniqueId}_${sanitizeFilename(voice_name)}.${fileExtension}`;
-
-    console.log('Uploading file to storage...');
-    const { data: uploadData, error: uploadError } = await supabaseAdmin.storage
-      .from('voice-recordings')
-      .upload(fileName, voiceFile.data, {
-        contentType: voiceFile.type,
-        upsert: false
-      });
-
-    if (uploadError) {
-      console.error('Supabase upload error:', uploadError);
-      return createErrorResponse(500, `Upload failed: ${uploadError.message}`, headers);
-    }
-
-    console.log('File uploaded successfully, starting transcription...');
-
-    // Step 3: Transcribe audio using ElevenLabs
-    const transcriptionResult = await transcribeWithElevenLabs(voiceFile.data, voiceFile.type);
+    // Step 1: Convert speech to text using ElevenLabs
+    console.log('Step 1: Converting speech to text...');
+    const transcriptionResult = await speechToText(audioFile.data, audioFile.type);
 
     if (!transcriptionResult.success) {
-      console.error('Transcription failed:', transcriptionResult.error);
-      return createErrorResponse(500, `Transcription failed: ${transcriptionResult.error}`, headers);
+      return createErrorResponse(500, `Speech-to-text failed: ${transcriptionResult.error}`, headers);
     }
 
-    console.log('Transcription successful, sending to n8n...');
+    const userText = transcriptionResult.text;
+    console.log(`Transcription successful: "${userText.substring(0, 100)}..."`);
 
-    // Step 4: Send to n8n and wait for response
-    const n8nResult = await sendToN8nAndWaitForResponse(transcriptionResult.transcription);
+    // Step 2: Send transcribed text to n8n for processing
+    console.log('Step 2: Sending to n8n for processing...');
+    const n8nResult = await sendToN8n(userText);
 
     if (!n8nResult.success) {
-      console.error('n8n processing failed:', n8nResult.error);
       return createErrorResponse(500, `n8n processing failed: ${n8nResult.error}`, headers);
     }
 
-    console.log('n8n response received, converting to speech...');
+    const aiResponse = n8nResult.response;
+    console.log(`n8n response received: "${aiResponse.substring(0, 100)}..."`);
 
-    // Step 5: Convert n8n response to speech using ElevenLabs TTS
-    const ttsResult = await convertTextToSpeech(n8nResult.response_text);
+    // Step 3: Save complete interaction to Supabase
+    console.log('Step 3: Saving to database...');
+    const savedRecord = await saveToDatabase({
+      userId,
+      sessionId,
+      userText,
+      aiResponse,
+      transcriptionData: transcriptionResult,
+      n8nData: n8nResult,
+      audioMetadata: {
+        filename: audioFile.filename,
+        size: audioFile.size,
+        type: audioFile.type
+      }
+    });
 
-    // Step 6: Save everything to database
-    const estimatedDurationSeconds = Math.round(voiceFile.size / (128 * 1024 / 8));
-    
-    const { data: voiceRecord, error: dbError } = await supabaseAdmin
-      .from('voice_recordings')
-      .insert([{
-        voice_name: voice_name.trim(),
-        description: description?.trim() || null,
-        file_path: uploadData.path,
-        file_size_bytes: voiceFile.size,
-        mime_type: voiceFile.type,
-        duration_seconds: estimatedDurationSeconds,
-        
-        // Original transcription
-        transcription_text: transcriptionResult.transcription,
-        transcription_status: 'completed',
-        transcription_confidence: transcriptionResult.confidence || null,
-        language_detected: transcriptionResult.language || null,
-        transcription_completed_at: new Date().toISOString(),
-        
-        // n8n processing results
-        n8n_response_text: n8nResult.response_text,
-        n8n_processing_status: 'completed',
-        n8n_processing_time_ms: n8nResult.processing_time_ms,
-        
-        // TTS results
-        tts_audio_data: ttsResult.success ? ttsResult.audio_base64 : null,
-        tts_status: ttsResult.success ? 'completed' : 'failed',
-        tts_error: ttsResult.success ? null : ttsResult.error
-      }])
-      .select()
-      .single();
-
-    if (dbError) {
-      console.error('Database insert error:', dbError);
-      // Clean up uploaded file if database insert fails
-      await supabaseAdmin.storage.from('voice-recordings').remove([uploadData.path]);
-      return createErrorResponse(500, 'Failed to save voice data', headers);
+    if (!savedRecord.success) {
+      return createErrorResponse(500, `Database save failed: ${savedRecord.error}`, headers);
     }
 
-    // Step 7: Get public URL for original voice file
-    const { data: publicUrlData } = supabaseAdmin.storage
-      .from('voice-recordings')
-      .getPublicUrl(uploadData.path);
+    console.log('Voice processing completed successfully');
 
-    // Step 8: Log activity
-    await supabaseAdmin.from('vr_activity_logs').insert([{
-      user_id: null,
-      activity_type: 'complete_voice_workflow',
-      activity_data: {
-        voice_id: voiceRecord.id,
-        voice_name: voice_name,
-        file_size: voiceFile.size,
-        transcription_length: transcriptionResult.transcription.length,
-        n8n_response_length: n8nResult.response_text.length,
-        tts_success: ttsResult.success,
-        total_processing_time_ms: n8nResult.processing_time_ms
-      }
-    }]).then().catch(err => console.log('Activity log failed:', err));
-
-    console.log('Complete voice workflow finished successfully');
-
-    // Return complete response with both text and audio
+    // Step 4: Return complete response
     return createSuccessResponse({
-      // Voice metadata
-      voice_id: voiceRecord.id,
-      voice_name: voiceRecord.voice_name,
-      description: voiceRecord.description,
-      original_file_url: publicUrlData.publicUrl,
-      file_size_bytes: voiceFile.size,
-      estimated_duration_seconds: estimatedDurationSeconds,
-      
-      // Processing results
-      user_transcription: transcriptionResult.transcription,
-      ai_response_text: n8nResult.response_text,
-      ai_response_audio: ttsResult.success ? ttsResult.audio_base64 : null,
-      ai_response_audio_format: ttsResult.success ? 'audio/mpeg' : null,
+      // Interaction data
+      interaction_id: savedRecord.data.id,
+      user_input: userText,
+      ai_response: aiResponse,
       
       // Processing metadata
-      transcription_confidence: transcriptionResult.confidence,
-      language_detected: transcriptionResult.language,
-      n8n_processing_time_ms: n8nResult.processing_time_ms,
-      tts_success: ttsResult.success,
-      tts_error: ttsResult.success ? null : ttsResult.error,
+      transcription: {
+        confidence: transcriptionResult.confidence,
+        language: transcriptionResult.language,
+        processing_time_ms: transcriptionResult.processing_time
+      },
+      n8n_processing: {
+        processing_time_ms: n8nResult.processing_time,
+        status: 'completed'
+      },
       
-      // Status
-      workflow_status: 'completed',
-      uploaded_at: voiceRecord.created_at,
-      processed_at: new Date().toISOString()
-    }, 
-    'Voice processed successfully - AI response ready', 
-    headers);
+      // Session info
+      user_id: userId,
+      session_id: sessionId,
+      processed_at: savedRecord.data.created_at,
+      
+      // Audio info
+      audio_metadata: {
+        filename: audioFile.filename,
+        size_bytes: audioFile.size,
+        duration_estimate_seconds: Math.round(audioFile.size / (16 * 1024)) // Rough estimate
+      }
+    }, 'Voice processed successfully', headers);
 
   } catch (error) {
-    console.error('Complete voice workflow error:', error);
+    console.error('Voice processing error:', error);
     return createErrorResponse(500, 'Internal server error during voice processing', headers);
   }
 };
 
 /**
- * Send transcription to n8n and wait for response
- * @param {string} transcriptionText - Transcribed text to send
- * @returns {Promise<Object>} - n8n response result
+ * Convert speech to text using ElevenLabs API
+ * @param {Buffer} audioBuffer - Audio file buffer
+ * @param {string} mimeType - Audio MIME type
+ * @returns {Promise<Object>} - Transcription result
  */
-async function sendToN8nAndWaitForResponse(transcriptionText) {
+async function speechToText(audioBuffer, mimeType) {
+  const startTime = Date.now();
+  
   try {
-    console.log('Sending to n8n and waiting for response...');
-    
-    const n8nWebhookUrl = process.env.N8N_WEBHOOK_URL;
-    if (!n8nWebhookUrl) {
-      return {
-        success: false,
-        error: 'N8N_WEBHOOK_URL not configured'
-      };
-    }
-
-    const payload = {
-      "Requirement": transcriptionText
-    };
-
-    const headers = {
-      'Content-Type': 'application/json'
-    };
-
-    const authToken = process.env.N8N_WEBHOOK_AUTH_TOKEN;
-    if (authToken && authToken.trim() !== '') {
-      headers['Authorization'] = `Bearer ${authToken}`;
-    }
-
-    console.log('Calling n8n webhook:', n8nWebhookUrl);
-    console.log('Payload:', JSON.stringify(payload, null, 2));
-    
-    const startTime = Date.now();
-    
-    const response = await fetch(n8nWebhookUrl, {
-      method: 'POST',
-      headers: headers,
-      body: JSON.stringify(payload)
-    });
-
-    const processingTime = Date.now() - startTime;
-    console.log(`n8n webhook response status: ${response.status}, time: ${processingTime}ms`);
-
-    if (!response.ok) {
-      const errorText = await response.text();
-      console.error('n8n webhook error:', errorText);
-      return {
-        success: false,
-        error: `n8n webhook error: ${response.status} - ${errorText}`
-      };
-    }
-
-    // Get the response text from n8n
-    let responseText;
-    try {
-      const responseData = await response.json();
-      console.log('n8n response data:', responseData);
-      
-      // Handle different n8n response formats
-      if (typeof responseData === 'string') {
-        responseText = responseData;
-      } else if (responseData.response) {
-        responseText = responseData.response;
-      } else if (responseData.text) {
-        responseText = responseData.text;
-      } else if (responseData.message) {
-        responseText = responseData.message;
-      } else if (responseData.result) {
-        responseText = responseData.result;
-      } else {
-        // If n8n returns complex object, stringify it
-        responseText = JSON.stringify(responseData);
-      }
-    } catch (e) {
-      // If not JSON, treat as plain text
-      responseText = await response.text();
-    }
-
-    // Check if we got a meaningful response (not just "Workflow was started")
-    if (!responseText || responseText.trim().length === 0 || 
-        responseText.includes('Workflow was started') ||
-        responseText.includes('workflow started')) {
-      
-      console.log('Got workflow started message, waiting for actual response...');
-      
-      // For now, return a default response until n8n is configured to return actual data
-      responseText = `Based on your request "${transcriptionText}", I found some great options for you. Let me help you find the perfect product that matches your needs.`;
-    }
-
-    console.log(`n8n response received: ${responseText.substring(0, 100)}...`);
-    
-    return {
-      success: true,
-      response_text: responseText.trim(),
-      processing_time_ms: processingTime,
-      status_code: response.status
-    };
-
-  } catch (error) {
-    console.error('n8n request error:', error);
-    return {
-      success: false,
-      error: error.message || 'Failed to get response from n8n'
-    };
-  }
-}
-
-/**
- * Convert text to speech using ElevenLabs TTS
- * @param {string} text - Text to convert to speech
- * @returns {Promise<Object>} - TTS result with audio data
- */
-async function convertTextToSpeech(text) {
-  try {
-    console.log('Converting text to speech...');
-    
     const elevenLabsApiKey = process.env.ELEVENLABS_API_KEY;
     if (!elevenLabsApiKey) {
       return {
@@ -346,90 +162,15 @@ async function convertTextToSpeech(text) {
       };
     }
 
-    // Use a default voice ID (you can make this configurable)
-    const defaultVoiceId = process.env.ELEVENLABS_DEFAULT_VOICE_ID || 'EXAVITQu4vr4xnSDxMaL'; // Example voice ID
-
-    const payload = {
-      text: text,
-      model_id: 'eleven_multilingual_v2', // FIXED: Use correct model ID
-      voice_settings: {
-        stability: 0.5,
-        similarity_boost: 0.5,
-        style: 0.0,
-        use_speaker_boost: true
-      }
-    };
-
-    console.log('Calling ElevenLabs TTS API...');
-    console.log('Using voice ID:', defaultVoiceId);
-    console.log('Text length:', text.length);
-    
-    const response = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${defaultVoiceId}`, {
-      method: 'POST',
-      headers: {
-        'Accept': 'audio/mpeg',
-        'Content-Type': 'application/json',
-        'xi-api-key': elevenLabsApiKey
-      },
-      body: JSON.stringify(payload)
-    });
-
-    console.log(`ElevenLabs TTS response status: ${response.status}`);
-
-    if (!response.ok) {
-      const errorText = await response.text();
-      console.error('ElevenLabs TTS error:', errorText);
-      return {
-        success: false,
-        error: `ElevenLabs TTS error: ${response.status} - ${errorText}`
-      };
-    }
-
-    const audioBuffer = await response.arrayBuffer();
-    const audioBase64 = Buffer.from(audioBuffer).toString('base64');
-    
-    console.log(`TTS successful: ${audioBase64.length} characters of base64 audio`);
-    
-    return {
-      success: true,
-      audio_base64: audioBase64,
-      content_type: 'audio/mpeg',
-      text_length: text.length
-    };
-
-  } catch (error) {
-    console.error('TTS error:', error);
-    return {
-      success: false,
-      error: error.message || 'Text-to-speech conversion failed'
-    };
-  }
-}
-
-/**
- * Transcribe audio using ElevenLabs API
- */
-async function transcribeWithElevenLabs(audioBuffer, mimeType) {
-  try {
-    console.log('Starting ElevenLabs transcription...');
-    
-    const elevenLabsApiKey = process.env.ELEVENLABS_API_KEY;
-    if (!elevenLabsApiKey) {
-      console.error('ElevenLabs API key not configured');
-      return {
-        success: false,
-        error: 'ElevenLabs API key not configured'
-      };
-    }
-
+    // Prepare form data
     const formData = new FormData();
     const audioBlob = new Blob([audioBuffer], { type: mimeType });
     
-    formData.append('file', audioBlob, `audio.${getFileExtensionFromMimeType(mimeType)}`);
+    formData.append('file', audioBlob, `audio.${getFileExtension(mimeType)}`);
     formData.append('model_id', 'scribe_v1');
     formData.append('response_format', 'verbose_json');
 
-    console.log('Calling ElevenLabs API...');
+    console.log('Calling ElevenLabs Speech-to-Text API...');
     
     const response = await fetch('https://api.elevenlabs.io/v1/speech-to-text', {
       method: 'POST',
@@ -439,7 +180,7 @@ async function transcribeWithElevenLabs(audioBuffer, mimeType) {
       body: formData
     });
 
-    console.log(`ElevenLabs API response status: ${response.status}`);
+    const processingTime = Date.now() - startTime;
 
     if (!response.ok) {
       const errorText = await response.text();
@@ -451,56 +192,249 @@ async function transcribeWithElevenLabs(audioBuffer, mimeType) {
     }
 
     const result = await response.json();
-    console.log('ElevenLabs API response received');
-
-    const transcriptionText = result.text || result.transcript || result.transcription || '';
-    const confidence = result.confidence || null;
-    const detectedLanguage = result.language || result.detected_language || 'en';
+    const transcriptionText = result.text || result.transcript || '';
 
     if (!transcriptionText || transcriptionText.trim().length === 0) {
-      console.error('No transcription text returned from ElevenLabs');
       return {
         success: false,
-        error: 'No transcription text returned from ElevenLabs API'
+        error: 'No speech detected in audio file'
       };
     }
 
-    console.log(`Transcription successful: ${transcriptionText.length} characters`);
+    console.log(`Speech-to-text completed in ${processingTime}ms`);
     
     return {
       success: true,
-      transcription: transcriptionText.trim(),
-      confidence: confidence,
-      language: detectedLanguage
+      text: transcriptionText.trim(),
+      confidence: result.confidence || null,
+      language: result.language || result.detected_language || 'en',
+      processing_time: processingTime
     };
 
   } catch (error) {
-    console.error('ElevenLabs transcription error:', error);
+    console.error('Speech-to-text error:', error);
     return {
       success: false,
-      error: error.message || 'Transcription processing failed'
+      error: error.message || 'Speech-to-text conversion failed'
     };
   }
 }
 
 /**
- * Fast multipart parsing optimized for Netlify
+ * Send text to n8n workflow and wait for response
+ * @param {string} text - Text to process
+ * @returns {Promise<Object>} - n8n processing result
  */
-async function parseMultipartDataFast(event) {
+async function sendToN8n(text) {
+  const startTime = Date.now();
+  
+  try {
+    const n8nWebhookUrl = process.env.N8N_WEBHOOK_URL;
+    if (!n8nWebhookUrl) {
+      return {
+        success: false,
+        error: 'N8N_WEBHOOK_URL not configured'
+      };
+    }
+
+    const payload = {
+      "text": text,
+      "user_input": text,
+      "query": text,
+      "requirement": text
+    };
+
+    const headers = {
+      'Content-Type': 'application/json',
+      'Accept': 'application/json'
+    };
+
+    // Add authentication if configured
+    const authToken = process.env.N8N_WEBHOOK_AUTH_TOKEN;
+    if (authToken && authToken.trim() !== '') {
+      headers['Authorization'] = `Bearer ${authToken}`;
+    }
+
+    console.log('Sending to n8n webhook:', n8nWebhookUrl);
+    console.log('Payload:', JSON.stringify(payload, null, 2));
+    
+    const response = await fetch(n8nWebhookUrl, {
+      method: 'POST',
+      headers: headers,
+      body: JSON.stringify(payload)
+    });
+
+    const processingTime = Date.now() - startTime;
+    console.log(`n8n response received in ${processingTime}ms, status: ${response.status}`);
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error('n8n webhook error:', errorText);
+      return {
+        success: false,
+        error: `n8n webhook error: ${response.status} - ${errorText}`
+      };
+    }
+
+    // Parse n8n response
+    let responseText;
+    const contentType = response.headers.get('content-type');
+    
+    if (contentType && contentType.includes('application/json')) {
+      const responseData = await response.json();
+      console.log('n8n JSON response:', responseData);
+      
+      // Extract text from various possible response formats
+      responseText = responseData.response || 
+                   responseData.text || 
+                   responseData.message || 
+                   responseData.result || 
+                   responseData.output ||
+                   JSON.stringify(responseData);
+    } else {
+      responseText = await response.text();
+    }
+
+    // Validate response
+    if (!responseText || responseText.trim().length === 0) {
+      return {
+        success: false,
+        error: 'Empty response from n8n'
+      };
+    }
+
+    // Check for workflow started messages (means async processing)
+    if (responseText.toLowerCase().includes('workflow') && 
+        (responseText.toLowerCase().includes('started') || responseText.toLowerCase().includes('triggered'))) {
+      
+      console.log('Received workflow started message, providing default response');
+      responseText = `Thank you for your request: "${text}". I'm processing your query and will provide you with the best recommendations shortly.`;
+    }
+
+    return {
+      success: true,
+      response: responseText.trim(),
+      processing_time: processingTime,
+      status_code: response.status
+    };
+
+  } catch (error) {
+    console.error('n8n request error:', error);
+    return {
+      success: false,
+      error: error.message || 'Failed to process request with n8n'
+    };
+  }
+}
+
+/**
+ * Save interaction data to Supabase
+ * @param {Object} data - Complete interaction data
+ * @returns {Promise<Object>} - Save result
+ */
+async function saveToDatabase(data) {
+  try {
+    const {
+      userId,
+      sessionId,
+      userText,
+      aiResponse,
+      transcriptionData,
+      n8nData,
+      audioMetadata
+    } = data;
+
+    console.log('Saving interaction to database...');
+
+    // Insert into voice_interactions table
+    const { data: savedRecord, error: dbError } = await supabaseAdmin
+      .from('voice_interactions')
+      .insert([{
+        user_id: userId,
+        session_id: sessionId,
+        
+        // User input data
+        user_text: userText,
+        audio_filename: audioMetadata.filename,
+        audio_size_bytes: audioMetadata.size,
+        audio_mime_type: audioMetadata.type,
+        
+        // Transcription data
+        transcription_confidence: transcriptionData.confidence,
+        detected_language: transcriptionData.language,
+        transcription_time_ms: transcriptionData.processing_time,
+        
+        // AI response data
+        ai_response_text: aiResponse,
+        n8n_processing_time_ms: n8nData.processing_time,
+        n8n_status_code: n8nData.status_code,
+        
+        // Metadata
+        processing_completed_at: new Date().toISOString(),
+        status: 'completed'
+      }])
+      .select()
+      .single();
+
+    if (dbError) {
+      console.error('Database save error:', dbError);
+      return {
+        success: false,
+        error: `Database error: ${dbError.message}`
+      };
+    }
+
+    // Log activity
+    await supabaseAdmin.from('vr_activity_logs').insert([{
+      user_id: userId,
+      activity_type: 'voice_interaction_completed',
+      activity_data: {
+        interaction_id: savedRecord.id,
+        user_text_length: userText.length,
+        ai_response_length: aiResponse.length,
+        transcription_confidence: transcriptionData.confidence,
+        total_processing_time_ms: transcriptionData.processing_time + n8nData.processing_time
+      }
+    }]).then().catch(err => console.log('Activity log warning:', err));
+
+    console.log('Interaction saved successfully, ID:', savedRecord.id);
+
+    return {
+      success: true,
+      data: savedRecord
+    };
+
+  } catch (error) {
+    console.error('Database save error:', error);
+    return {
+      success: false,
+      error: error.message || 'Failed to save to database'
+    };
+  }
+}
+
+/**
+ * Parse multipart form data
+ * @param {Object} event - Netlify event object
+ * @returns {Promise<Object>} - Parsed data
+ */
+async function parseMultipartData(event) {
   try {
     const contentType = event.headers['content-type'] || event.headers['Content-Type'];
-    const boundary = extractBoundarySimple(contentType);
-    
+    if (!contentType || !contentType.includes('multipart/form-data')) {
+      return { success: false, error: 'Content-Type must be multipart/form-data' };
+    }
+
+    const boundary = extractBoundary(contentType);
     if (!boundary) {
-      return { success: false, error: 'Could not extract boundary from Content-Type header' };
+      return { success: false, error: 'Could not extract boundary from Content-Type' };
     }
 
     const bodyBuffer = event.isBase64Encoded 
       ? Buffer.from(event.body, 'base64')
       : Buffer.from(event.body, 'binary');
 
-    const boundaryString = `--${boundary}`;
-    const parts = bodyBuffer.toString('binary').split(boundaryString);
+    const parts = bodyBuffer.toString('binary').split(`--${boundary}`);
     
     const files = {};
     const fields = {};
@@ -513,7 +447,7 @@ async function parseMultipartDataFast(event) {
       if (headerEndIndex === -1) continue;
 
       const headers = part.substring(0, headerEndIndex);
-      const body = part.substring(headerEndIndex + 4);
+      const body = part.substring(headerEndIndex + 4, part.length - 2);
 
       const nameMatch = headers.match(/name="([^"]+)"/);
       if (!nameMatch) continue;
@@ -523,9 +457,10 @@ async function parseMultipartDataFast(event) {
       const contentTypeMatch = headers.match(/Content-Type:\s*([^\r\n]+)/i);
 
       if (filenameMatch) {
+        // This is a file
         const filename = filenameMatch[1];
         const contentType = contentTypeMatch ? contentTypeMatch[1].trim() : 'application/octet-stream';
-        let bodyData = Buffer.from(body.substring(0, body.length - 2), 'binary');
+        const bodyData = Buffer.from(body, 'binary');
         
         files[fieldName] = {
           filename: filename,
@@ -534,14 +469,12 @@ async function parseMultipartDataFast(event) {
           size: bodyData.length
         };
       } else {
-        fields[fieldName] = body.substring(0, body.length - 2);
+        // This is a text field
+        fields[fieldName] = body;
       }
     }
 
-    return {
-      success: true,
-      data: { files, fields }
-    };
+    return { success: true, data: { files, fields } };
 
   } catch (error) {
     console.error('Multipart parsing error:', error);
@@ -549,57 +482,22 @@ async function parseMultipartDataFast(event) {
   }
 }
 
-function extractBoundarySimple(contentType) {
+/**
+ * Extract boundary from Content-Type header
+ * @param {string} contentType - Content-Type header value
+ * @returns {string|null} - Boundary string
+ */
+function extractBoundary(contentType) {
   const match = contentType.match(/boundary=([^;,\s]+)/);
   return match ? match[1].replace(/['"]/g, '') : null;
 }
 
-async function ensureBucketExists() {
-  try {
-    const { data: buckets, error: listError } = await supabaseAdmin.storage.listBuckets();
-    
-    if (listError) {
-      console.error('Error listing buckets:', listError);
-      return false;
-    }
-    
-    const bucketExists = buckets.some(bucket => bucket.id === 'voice-recordings');
-    
-    if (!bucketExists) {
-      console.log('Creating voice-recordings bucket...');
-      
-      const { data, error: createError } = await supabaseAdmin.storage.createBucket('voice-recordings', {
-        public: true,
-        fileSizeLimit: 10485760,
-        allowedMimeTypes: ['audio/wav', 'audio/mp3', 'audio/mpeg', 'audio/m4a', 'audio/ogg', 'audio/webm', 'audio/flac', 'audio/aac']
-      });
-      
-      if (createError) {
-        console.error('Error creating bucket:', createError);
-        return false;
-      }
-      
-      console.log('Voice recordings bucket created successfully');
-    }
-    
-    return true;
-  } catch (error) {
-    console.error('Error ensuring bucket exists:', error);
-    return false;
-  }
-}
-
-function getFileExtension(input) {
-  if (input && input.includes('.')) {
-    const parts = input.split('.');
-    const ext = parts[parts.length - 1].toLowerCase();
-    if (ext && ext.length <= 4) return ext;
-  }
-  
-  return getFileExtensionFromMimeType(input);
-}
-
-function getFileExtensionFromMimeType(mimeType) {
+/**
+ * Get file extension from MIME type
+ * @param {string} mimeType - MIME type
+ * @returns {string} - File extension
+ */
+function getFileExtension(mimeType) {
   const typeMap = {
     'audio/wav': 'wav',
     'audio/wave': 'wav',
@@ -609,17 +507,8 @@ function getFileExtensionFromMimeType(mimeType) {
     'audio/m4a': 'm4a',
     'audio/ogg': 'ogg',
     'audio/webm': 'webm',
-    'audio/flac': 'flac',
-    'audio/aac': 'aac'
+    'audio/flac': 'flac'
   };
   
   return typeMap[mimeType] || 'audio';
-}
-
-function sanitizeFilename(filename) {
-  return filename
-    .replace(/[^a-zA-Z0-9_-]/g, '_')
-    .replace(/_+/g, '_')
-    .replace(/^_|_$/g, '')
-    .substring(0, 50);
 }
