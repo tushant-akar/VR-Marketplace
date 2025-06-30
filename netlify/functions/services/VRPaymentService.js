@@ -2,6 +2,8 @@
  * VR Payment Service for handling checkout and payment processing
  * Integrates with Stripe for online payments and handles cash payments
  * Following the existing codebase patterns and conventions
+ * 
+ * FIXED: Order number generation issue with lpad function
  */
 
 const { supabaseAdmin } = require('../config/supabase');
@@ -13,6 +15,16 @@ class VRPaymentService {
     this.stripeSecretKey = process.env.STRIPE_SECRET_KEY;
     this.stripe = this.stripeSecretKey ? require('stripe')(this.stripeSecretKey) : null;
     this.taxRate = 0.08; // 8% tax rate (configurable)
+  }
+
+  /**
+   * Generate unique order number
+   * @returns {string} - Formatted order number
+   */
+  generateOrderNumber() {
+    const timestamp = Date.now().toString();
+    const random = Math.floor(Math.random() * 1000).toString().padStart(3, '0');
+    return `ORD-${timestamp.slice(-6)}${random}`;
   }
 
   /**
@@ -139,12 +151,16 @@ class VRPaymentService {
       // Get cart items
       const cart = await this.shoppingService.getShoppingCart(sessionId);
 
-      // Create order
+      // Generate order number to avoid database function issues
+      const orderNumber = this.generateOrderNumber();
+
+      // Create order with explicit order_number
       const { data: order, error: orderError } = await supabaseAdmin
         .from('orders')
         .insert([{
           user_id: userId,
           session_id: sessionId,
+          order_number: orderNumber, // ✅ FIXED: Explicit order number generation
           payment_method: paymentMethod,
           payment_status: 'pending',
           subtotal: totals.subtotal,
@@ -166,7 +182,8 @@ class VRPaymentService {
         order_id: order.id,
         product_id: item.product_id,
         quantity: item.quantity,
-        unit_price: item.unit_price
+        unit_price: item.unit_price,
+        total_price: item.total_price || (item.unit_price * item.quantity)
       }));
 
       const { error: itemsError } = await supabaseAdmin
@@ -478,12 +495,18 @@ class VRPaymentService {
         return;
       }
 
-      // Update stock for each product
+      // Update stock for each product using direct SQL
       for (const item of orderItems) {
-        await supabaseAdmin.rpc('update_product_stock', {
-          product_id: item.product_id,
-          quantity_sold: item.quantity
-        });
+        const { error: stockError } = await supabaseAdmin
+          .from('products')
+          .update({
+            stock_quantity: supabaseAdmin.raw(`stock_quantity - ${item.quantity}`)
+          })
+          .eq('id', item.product_id);
+
+        if (stockError) {
+          console.error(`Error updating stock for product ${item.product_id}:`, stockError);
+        }
       }
     } catch (error) {
       console.error('Error updating product stock:', error);
