@@ -1,5 +1,5 @@
 /**
- * VR Payment API endpoint
+ * VR Payment API endpoint - FIXED PATH ROUTING
  * Handles checkout, payment processing, and order management
  */
 const { createResponse, createErrorResponse, createSuccessResponse } = require('./utils/response');
@@ -15,7 +15,7 @@ exports.handler = async (event, context) => {
   }
 
   try {
-    const { httpMethod, path, body } = event;
+    const { httpMethod, path, body, queryStringParameters = {} } = event;
     const authHeader = event.headers.authorization || event.headers.Authorization;
 
     // Authenticate user
@@ -34,17 +34,26 @@ exports.handler = async (event, context) => {
       }
     }
 
+    // ✅ FIXED: Properly handle path segments
     const pathSegments = path.split('/').filter(segment => segment);
+    
+    // Find the actual route after 'vr-payment'
+    const routeIndex = pathSegments.indexOf('vr-payment') + 1;
+    const actualPathSegments = pathSegments.slice(routeIndex);
+    
+    console.log('Full path:', path);
+    console.log('Path segments:', pathSegments);
+    console.log('Actual route segments:', actualPathSegments);
 
     switch (httpMethod) {
       case 'GET':
-        return await handlePaymentGetRequests(pathSegments, auth.user);
+        return await handlePaymentGetRequests(actualPathSegments, auth.user, queryStringParameters);
       
       case 'POST':
-        return await handlePaymentPostRequests(pathSegments, requestBody, auth.user);
+        return await handlePaymentPostRequests(actualPathSegments, requestBody, auth.user);
       
       case 'PUT':
-        return await handlePaymentPutRequests(pathSegments, requestBody, auth.user);
+        return await handlePaymentPutRequests(actualPathSegments, requestBody, auth.user);
       
       default:
         return createErrorResponse(405, `Method ${httpMethod} not allowed`);
@@ -55,8 +64,10 @@ exports.handler = async (event, context) => {
   }
 };
 
-async function handlePaymentGetRequests(pathSegments, user) {
+async function handlePaymentGetRequests(pathSegments, user, queryParams) {
   try {
+    console.log('GET - Processing path segments:', pathSegments);
+    
     switch (pathSegments[0]) {
       case 'checkout':
         if (!pathSegments[1]) {
@@ -76,8 +87,8 @@ async function handlePaymentGetRequests(pathSegments, user) {
       
       case 'orders':
         // Get user order history
-        const page = parseInt(event.queryStringParameters?.page) || 1;
-        const limit = parseInt(event.queryStringParameters?.limit) || 10;
+        const page = parseInt(queryParams.page) || 1;
+        const limit = parseInt(queryParams.limit) || 10;
         
         const orderHistory = await paymentService.getUserOrderHistory(user.id, { page, limit });
         return createSuccessResponse(orderHistory, 'Order history retrieved successfully');
@@ -90,7 +101,7 @@ async function handlePaymentGetRequests(pathSegments, user) {
         return createSuccessResponse(receipt, 'Receipt generated successfully');
       
       default:
-        return createErrorResponse(404, 'Endpoint not found');
+        return createErrorResponse(404, `Endpoint not found. Available GET routes: checkout/{sessionId}, order/{orderId}, orders, receipt/{orderId}`);
     }
   } catch (error) {
     console.error('Payment GET error:', error);
@@ -100,9 +111,36 @@ async function handlePaymentGetRequests(pathSegments, user) {
 
 async function handlePaymentPostRequests(pathSegments, body, user) {
   try {
+    console.log('POST - Processing path segments:', pathSegments);
+    
     switch (pathSegments[0]) {
+      case 'checkout':
+        // Create checkout/order - alternative endpoint
+        if (!pathSegments[1]) {
+          return createErrorResponse(400, 'Session ID is required in path');
+        }
+        
+        const { payment_method = 'stripe' } = body;
+        
+        if (!['cash', 'stripe'].includes(payment_method)) {
+          return createErrorResponse(400, 'Invalid payment method. Must be "cash" or "stripe"');
+        }
+        
+        // Initialize checkout first
+        const checkoutDetails = await paymentService.initializeCheckout(pathSegments[1], user.id);
+        
+        // Create order
+        const order = await paymentService.createOrder(
+          pathSegments[1],
+          user.id,
+          payment_method,
+          checkoutDetails.totals
+        );
+        
+        return createSuccessResponse(order, 'Checkout completed and order created successfully');
+      
       case 'order':
-        // Create new order
+        // Create new order (original endpoint)
         const { session_id, payment_method } = body;
         
         if (!session_id || !payment_method) {
@@ -168,7 +206,11 @@ async function handlePaymentPostRequests(pathSegments, body, user) {
             );
             
             return createSuccessResponse(confirmationResult, 'Payment confirmed successfully');
+          } else {
+            return createErrorResponse(404, `Invalid Stripe endpoint. Use: payment/stripe/intent or payment/stripe/confirm`);
           }
+        } else {
+          return createErrorResponse(404, `Invalid payment method. Use: payment/cash or payment/stripe/*`);
         }
         break;
       
@@ -190,7 +232,7 @@ async function handlePaymentPostRequests(pathSegments, body, user) {
         return createSuccessResponse(refundResult, 'Refund processed successfully');
       
       default:
-        return createErrorResponse(404, 'Endpoint not found');
+        return createErrorResponse(404, `Endpoint not found. Available POST routes: checkout/{sessionId}, order, payment/cash, payment/stripe/intent, payment/stripe/confirm, refund`);
     }
   } catch (error) {
     console.error('Payment POST error:', error);
@@ -200,6 +242,8 @@ async function handlePaymentPostRequests(pathSegments, body, user) {
 
 async function handlePaymentPutRequests(pathSegments, body, user) {
   try {
+    console.log('PUT - Processing path segments:', pathSegments);
+    
     if (pathSegments[0] === 'order' && pathSegments[1] === 'cancel') {
       // Cancel order
       const { order_id, reason } = body;
@@ -217,7 +261,7 @@ async function handlePaymentPutRequests(pathSegments, body, user) {
       return createSuccessResponse(cancellationResult, 'Order cancelled successfully');
     }
     
-    return createErrorResponse(404, 'Endpoint not found');
+    return createErrorResponse(404, `Endpoint not found. Available PUT routes: order/cancel`);
   } catch (error) {
     console.error('Payment PUT error:', error);
     return createErrorResponse(500, error.message);
