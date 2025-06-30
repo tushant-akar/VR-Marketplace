@@ -1,5 +1,5 @@
 /**
- * VR Payment API endpoint - FIXED PATH ROUTING
+ * VR Payment API endpoint - FIXED VARIABLE CONFLICTS
  * Handles checkout, payment processing, and order management
  */
 const { createResponse, createErrorResponse, createSuccessResponse } = require('./utils/response');
@@ -79,8 +79,8 @@ async function handlePaymentGetRequests(pathSegments, user, queryParams) {
       case 'order':
         if (pathSegments[1]) {
           // Get specific order
-          const order = await paymentService.getOrder(pathSegments[1], user.id);
-          return createSuccessResponse(order, 'Order retrieved successfully');
+          const orderDetails = await paymentService.getOrder(pathSegments[1], user.id);
+          return createSuccessResponse(orderDetails, 'Order retrieved successfully');
         } else {
           return createErrorResponse(400, 'Order ID is required');
         }
@@ -130,14 +130,14 @@ async function handlePaymentPostRequests(pathSegments, body, user) {
         const checkoutData = await paymentService.initializeCheckout(pathSegments[1], user.id);
         
         // Create order
-        const newOrder = await paymentService.createOrder(
+        const checkoutOrder = await paymentService.createOrder(
           pathSegments[1],
           user.id,
           checkoutPaymentMethod,
           checkoutData.totals
         );
         
-        return createSuccessResponse(newOrder, 'Checkout completed and order created successfully');
+        return createSuccessResponse(checkoutOrder, 'Checkout completed and order created successfully');
       
       case 'order':
         // Create new order (original endpoint)
