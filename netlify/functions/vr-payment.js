@@ -127,14 +127,14 @@ async function handlePaymentPostRequests(pathSegments, body, user) {
         }
         
         // Initialize checkout first
-        const checkoutDetails = await paymentService.initializeCheckout(pathSegments[1], user.id);
+        const checkoutData = await paymentService.initializeCheckout(pathSegments[1], user.id);
         
         // Create order
         const order = await paymentService.createOrder(
           pathSegments[1],
           user.id,
           checkoutPaymentMethod,
-          checkoutDetails.totals
+          checkoutData.totals
         );
         
         return createSuccessResponse(order, 'Checkout completed and order created successfully');
@@ -152,14 +152,14 @@ async function handlePaymentPostRequests(pathSegments, body, user) {
         }
         
         // Initialize checkout first
-        const checkoutDetails = await paymentService.initializeCheckout(session_id, user.id);
+        const orderCheckoutDetails = await paymentService.initializeCheckout(session_id, user.id);
         
         // Create order
         const order = await paymentService.createOrder(
           session_id,
           user.id,
           payment_method,
-          checkoutDetails.totals
+          orderCheckoutDetails.totals
         );
         
         return createSuccessResponse(order, 'Order created successfully');
